@@ -1,0 +1,97 @@
+import mongoose from 'mongoose';
+import bcrypt from 'bcryptjs';
+
+const userSchema = new mongoose.Schema({
+  email: { type: String, unique: true, required: true },
+  password: { type: String, required: true }
+});
+
+// Hash the user's password before saving it to the database
+userSchema.pre('save', function (next) {
+  const user = this;
+
+  if (!user.isModified('password')) return next();
+
+  bcrypt.hash(user.password, 10, (err, hash) => {
+    if (err) return next(err);
+
+    user.password = hash;
+    next();
+  });
+});
+
+export default mongoose.model('User', userSchema);
+import express from 'express';
+import User from '../models/user';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+const crypto = require('crypto');
+
+
+
+
+
+const secretKey = crypto.randomBytes(64).toString('hex');
+
+const router = express.Router();
+
+
+
+  
+
+router.post('/register', async (req, res) => {
+  try {
+    const user = new User(req.body);
+    await user.save();
+    res.status(200).send({ message: 'User registered successfully' });
+  } catch (err) {
+    res.status(400).send(err);
+  }
+});
+
+router.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+  const user = await User.findOne({ email });
+
+  if (!user) {
+    return res.status(400).send({ message: 'Invalid email or password' });
+  }
+
+  const isPasswordMatch = await bcrypt.compare(password, user.password);
+
+  if (!isPasswordMatch) {
+    return res.status(400).send({ message: 'Invalid email or password' });
+  }
+
+  const token = jwt.sign({ id: user._id }, secretKey, { expiresIn: '1h' });
+
+  res.status(200).send({ token });
+});
+
+export default router;
+import express from 'express';
+import bodyParser from 'body-parser';
+import mongoose from 'mongoose';
+import authRoutes from './routes/authRoutes';
+const cors = require('cors');
+
+const app = express();
+
+app.use(bodyParser.json());
+
+// Use CORS middleware to allow requests from Angular's development server
+app.use(cors({ origin: "http://localhost:4200" }));
+
+// Handle OPTIONS requests (for preflight checks)
+app.options('*', cors());
+
+// Connect to MongoDB
+mongoose.connect('mongodb://127.0.0.1:27017/accounting');
+
+// Routes will be added here
+app.use('/api/auth', authRoutes);
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
