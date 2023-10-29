@@ -1,15 +1,19 @@
+// routes/authRoutes.ts
+
 import express from 'express';
 import User from '../models/user';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-const crypto = require('crypto');
+import { log } from 'console';
+require('dotenv').config();
 
-const secretKey = crypto.randomBytes(64).toString('hex');
+const secretKey = process.env.JWT_SECRET;
 
 const router = express.Router();
 
 
 router.post('/register', async (req, res) => {
+  
   try {
     const user = new User(req.body);
     await user.save();
@@ -33,7 +37,7 @@ router.post('/login', async (req, res) => {
     return res.status(400).send({ message: 'Invalid email or password' });
   }
 
-  const token = jwt.sign({ id: user._id }, secretKey, { expiresIn: '1h' });
+  const token = jwt.sign({ id: user._id }, secretKey!);
 
   res.status(200).send({ token });
 });

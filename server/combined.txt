@@ -1,9 +1,117 @@
+// authMiddleware.ts
+
+import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+require('dotenv').config();
+
+const verifyToken = (req: Request, res: Response, next: NextFunction) => {
+  console.log('Entered verifyToken middleware');
+  
+  const token = req.headers['x-access-token'] || req.headers['authorization'];
+  
+  
+  if (!token) {
+    return res.status(403).send({ message: 'No token provided!' });
+  }
+
+  jwt.verify(token as string, process.env.JWT_SECRET!, (err, decoded: any) => {
+    if (err) {
+      return res.status(500).send({ message: 'Failed to authenticate token.' });
+    }
+    req.userId = decoded.id;
+    next();
+  });
+  
+};
+
+export default verifyToken;
+//models/chartOfAccounts.ts
+
+import mongoose from 'mongoose';
+
+const chartOfAccountsSchema = new mongoose.Schema({
+  account_id: { type: mongoose.Schema.Types.ObjectId, auto: true },
+  account_name: { type: String, required: true },
+  account_type: {
+    type: String,
+    enum: ['Asset', 'Liability', 'Equity', 'Revenue', 'Expense'],
+    required: true
+  },
+  subtype: { type: String },  // Add validation or enums as needed
+  description: { type: String },
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
+});
+
+export const ChartOfAccounts = mongoose.model('ChartOfAccounts', chartOfAccountsSchema);
+
+export const initializeDefaultAccounts = async (userId: string) => {
+  const predefinedAccounts = [
+    {
+      user_id: userId,
+      account_name: 'Cash',
+      account_type: 'Asset',
+      subtype: 'Current Asset',
+      description: 'Cash on hand',
+    },
+    {
+      user_id: userId,
+      account_name: 'Accounts Receivable',
+      account_type: 'Asset',
+      subtype: 'Current Asset',
+      description: 'Amounts owed by customers from sales on credit',
+    },
+    {
+      user_id: userId,
+      account_name: 'Accounts Payable',
+      account_type: 'Liability',
+      subtype: 'Current Liability',
+      description: 'Amounts owed to suppliers or other creditors',
+    },
+    {
+      user_id: userId,
+      account_name: 'Sales Revenue',
+      account_type: 'Revenue',
+      description: 'Income from sales',
+    },
+    {
+      user_id: userId,
+      account_name: 'Rent Expense',
+      account_type: 'Expense',
+      description: 'Expenses related to rented properties',
+    },
+    {
+      user_id: userId,
+      account_name: 'Utilities Expense',
+      account_type: 'Expense',
+      description: 'Expenses for utilities like electricity, water, etc.',
+    },
+    // ... Add more predefined accounts as needed
+  ];
+
+  return ChartOfAccounts.insertMany(predefinedAccounts);
+};
+//models/transaction.ts
+
+import mongoose from 'mongoose';
+
+const transactionSchema = new mongoose.Schema({
+  date: { type: Date, default: Date.now },
+  category: { type: mongoose.Schema.Types.ObjectId, ref: 'ChartOfAccounts', required: true },
+  amount: { type: Number, required: true },
+  account: { type: mongoose.Schema.Types.ObjectId, ref: 'ChartOfAccounts', required: true },
+  description: { type: String },
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
+});
+
+export default mongoose.model('Transaction', transactionSchema);
+// models/user.ts
+
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 
 const userSchema = new mongoose.Schema({
   email: { type: String, unique: true, required: true },
-  password: { type: String, required: true }
+  password: { type: String, required: true },
 });
 
 // Hash the user's password before saving it to the database
@@ -21,25 +129,22 @@ userSchema.pre('save', function (next) {
 });
 
 export default mongoose.model('User', userSchema);
+// routes/authRoutes.ts
+
 import express from 'express';
 import User from '../models/user';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-const crypto = require('crypto');
+import { log } from 'console';
+require('dotenv').config();
 
-
-
-
-
-const secretKey = crypto.randomBytes(64).toString('hex');
+const secretKey = process.env.JWT_SECRET;
 
 const router = express.Router();
 
 
-
-  
-
 router.post('/register', async (req, res) => {
+  
   try {
     const user = new User(req.body);
     await user.save();
@@ -63,21 +168,154 @@ router.post('/login', async (req, res) => {
     return res.status(400).send({ message: 'Invalid email or password' });
   }
 
-  const token = jwt.sign({ id: user._id }, secretKey, { expiresIn: '1h' });
+  const token = jwt.sign({ id: user._id }, secretKey!);
 
   res.status(200).send({ token });
 });
 
 export default router;
+// routes/chartOfAccountsRoutes.ts
+
+import express from 'express';
+import {ChartOfAccounts} from '../models/chartOfAccounts';
+import verifyToken from '../middleware/authMiddleware';
+import { initializeDefaultAccounts } from '../models/chartOfAccounts';
+
+
+const router = express.Router();
+
+router.use(verifyToken); // Place this at the beginning to apply middleware to all routes in this router
+
+router.get('/', async (req, res) => {
+  try {
+    
+    const userId = req.userId;
+    if (!userId) {
+        return res.status(400).send({ message: 'User ID not provided' });
+      }
+
+    // Try fetching accounts
+    let accounts = await ChartOfAccounts.find({ user_id: userId });
+
+    // If no accounts are found, create default accounts
+    if (!accounts.length) {
+      accounts = await initializeDefaultAccounts(userId) as any;
+    }
+
+    res.status(200).send(accounts);
+  } catch (err) {
+    res.status(400).send(err);
+  }
+});
+
+router.post('/', async (req, res) => {
+  try {
+    const account = new ChartOfAccounts(req.body);
+    await account.save();
+    res.status(200).send(account);
+  } catch (err) {
+    res.status(400).send(err);
+  }
+});
+
+router.put('/:account_id', async (req, res) => {
+  try {
+    const updatedAccount = await ChartOfAccounts.findByIdAndUpdate(req.params.account_id, req.body, { new: true });
+    res.status(200).send(updatedAccount);
+  } catch (err) {
+    res.status(400).send(err);
+  }
+});
+
+router.delete('/:account_id', async (req, res) => {
+  // Implement deletion logic (checking for transactions, etc.) before this.
+  try {
+    await ChartOfAccounts.findByIdAndRemove(req.params.account_id);
+    res.status(200).send({ message: 'Account deleted' });
+  } catch (err) {
+    res.status(400).send(err);
+  }
+});
+
+export default router;
+//routes/transactionRoutes.ts
+
+import express from 'express';
+import Transaction from '../models/transaction';
+import verifyToken from '../middleware/authMiddleware';
+
+const router = express.Router();
+
+router.use(verifyToken);  // Middleware to authenticate user
+
+router.get('/', async (req, res) => {
+  try {
+    const userId = req.userId;
+    const transactions = await Transaction.find({ user_id: userId });
+    res.status(200).send(transactions);
+  } catch (err) {
+    res.status(400).send(err);
+  }
+});
+
+router.post('/', async (req, res) => {
+  console.log('Processing POST request for /', req.userId);
+  try {
+    const { date, description, account, category, amount } = req.body;
+    const {userId} = req;
+    const transactionData = {
+      date,
+      description,
+      account,
+      category,
+      amount,
+      user_id: userId,
+   };
+    
+    const transaction = new Transaction(transactionData);
+    await transaction.save();
+    res.status(200).send(transaction);
+  } catch (err) {
+    console.log(err)
+    res.status(400).send(err);
+  }
+});
+
+router.put('/:transaction_id', async (req, res) => {
+  try {
+    const updatedTransaction = await Transaction.findByIdAndUpdate(req.params.transaction_id, req.body, { new: true });
+    res.status(200).send(updatedTransaction);
+  } catch (err) {
+    res.status(400).send(err);
+  }
+});
+
+router.delete('/:transaction_id', async (req, res) => {
+  try {
+    await Transaction.findByIdAndRemove(req.params.transaction_id);
+    res.status(200).send({ message: 'Transaction deleted' });
+  } catch (err) {
+    res.status(400).send(err);
+  }
+});
+
+export default router;
+//index.ts
+
 import express from 'express';
 import bodyParser from 'body-parser';
 import mongoose from 'mongoose';
 import authRoutes from './routes/authRoutes';
+import dotenv from 'dotenv';
+import chartOfAccountsRoutes from './routes/chartOfAccountsRoutes';
+import transactionRoutes from './routes/transactionRoutes';
+
 const cors = require('cors');
 
 const app = express();
 
 app.use(bodyParser.json());
+dotenv.config();
 
 // Use CORS middleware to allow requests from Angular's development server
 app.use(cors({ origin: "http://localhost:4200" }));
@@ -90,6 +328,8 @@ mongoose.connect('mongodb://127.0.0.1:27017/accounting');
 
 // Routes will be added here
 app.use('/api/auth', authRoutes);
+app.use('/api/chart-of-accounts', chartOfAccountsRoutes);
+app.use('/api/transactions', transactionRoutes);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
